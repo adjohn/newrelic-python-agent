@@ -1073,8 +1073,6 @@ class BedrockRecordEventMixin:
 
             try:
                 bedrock_attrs["duration"] = self._nr_ft.duration * 1000
-                if hasattr(self, "_nr_time_to_first_token"):
-                    bedrock_attrs["time_to_first_token"] = self._nr_time_to_first_token
                 handle_chat_completion_event(transaction, bedrock_attrs, request_timestamp)
             except Exception:
                 _logger.warning(RESPONSE_PROCESSING_FAILURE_LOG_MESSAGE, exc_info=True)
@@ -1129,7 +1127,7 @@ class BedrockRecordEventMixin:
         # Record the time here since parsing may be a bit slow, and can inflate the metric.
         time_to_first_token = (
             int(1000.0 * time.time()) - self._nr_request_timestamp
-            if not hasattr(self, "_nr_time_to_first_token")
+            if "time_to_first_token" not in bedrock_attrs
             else None
         )
 
@@ -1139,7 +1137,7 @@ class BedrockRecordEventMixin:
 
         # Attach time to first token after parsing to ensure there are no errors
         if time_to_first_token is not None:
-            self._nr_time_to_first_token = time_to_first_token
+            bedrock_attrs["time_to_first_token"] = time_to_first_token
 
         # In Langchain, the bedrock iterator exits early if type is "content_block_stop".
         # So we need to call the record events here since stop iteration will not be raised.
@@ -1159,8 +1157,8 @@ class BedrockRecordEventMixin:
                 bedrock_attrs["output_message_list"] = [{"role": "assistant", "content": ""}]
             bedrock_attrs["output_message_list"][0]["content"] += content
 
-            if content and not hasattr(self, "_nr_time_to_first_token"):
-                self._nr_time_to_first_token = int(1000.0 * time.time()) - self._nr_request_timestamp
+            if content and "time_to_first_token" not in bedrock_attrs:
+                bedrock_attrs["time_to_first_token"] = int(1000.0 * time.time()) - self._nr_request_timestamp
 
         if "messageStop" in event:
             bedrock_attrs["response.choices.finish_reason"] = (event.get("messageStop") or {}).get("stopReason", "")
@@ -1177,6 +1175,7 @@ class EventStreamWrapper(BedrockRecordEventMixin, ObjectProxy):
         g._nr_bedrock_attrs = getattr(self, "_nr_bedrock_attrs", {})
         g._nr_model_extractor = getattr(self, "_nr_model_extractor", NULL_EXTRACTOR)
         g._nr_is_converse = getattr(self, "_nr_is_converse", False)
+        self._nr_request_timestamp = g._nr_request_timestamp
         return g
 
 
@@ -1222,6 +1221,7 @@ class AsyncEventStreamWrapper(BedrockRecordEventMixin, ObjectProxy):
         g._nr_bedrock_attrs = getattr(self, "_nr_bedrock_attrs", {})
         g._nr_model_extractor = getattr(self, "_nr_model_extractor", NULL_EXTRACTOR)
         g._nr_is_converse = getattr(self, "_nr_is_converse", False)
+        self._nr_request_timestamp = g._nr_request_timestamp
         return g
 
 
