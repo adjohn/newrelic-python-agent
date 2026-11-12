@@ -158,7 +158,7 @@ def bedrock_server(loop):
     """
     This fixture will create a mocked backend for testing purposes.
     """
-    import aiobotocore
+    import aiobotocore.session
 
     from newrelic.core.config import _environ_as_bool
 
@@ -192,7 +192,7 @@ def bedrock_converse_server(loop):
     """
     This fixture will create a mocked backend for testing purposes.
     """
-    import aiobotocore
+    import aiobotocore.session
 
     from newrelic.core.config import _environ_as_bool
 

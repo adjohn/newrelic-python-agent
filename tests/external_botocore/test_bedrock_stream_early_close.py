@@ -13,14 +13,16 @@
 # limitations under the License.
 
 """
-Tests for Bedrock converse_stream responses that are closed before they are exhausted.
+Tests for Bedrock streaming responses that are closed or abandoned before they are exhausted.
 
-The LLM function trace is entered when ``converse_stream`` is called and normally exited when the event stream is
-exhausted. Closing the stream early must still exit the trace once and record the events built from the chunks
-received so far. If the trace stays open, the transaction can't be completed and is dropped.
+The LLM function trace is entered when ``converse_stream`` or ``invoke_model_with_response_stream`` is called and
+normally exited when the event stream is exhausted. Closing the stream early must still exit the trace once and record
+the events built from the chunks received so far. If the trace stays open, the transaction can't be completed and is
+dropped.
 """
 
 import gc
+import json
 
 import pytest
 from conftest import BOTOCORE_VERSION
@@ -34,6 +36,16 @@ from testing_support.validators.validate_transaction_metrics import validate_tra
 from newrelic.api.background_task import background_task
 
 METRIC = ("Llm/completion/Bedrock/converse_stream", 1)
+INVOKE_METRIC = ("Llm/completion/Bedrock/invoke_model_with_response_stream", 1)
+INVOKE_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
+INVOKE_BODY = json.dumps(
+    {
+        "anthropic_version": "bedrock-2023-05-31",
+        "messages": [{"role": "user", "content": "What is 212 degrees Fahrenheit converted to Celsius?"}],
+        "temperature": 0.7,
+        "max_tokens": 100,
+    }
+).encode("utf-8")
 MESSAGE = [{"role": "user", "content": [{"text": "What is 212 degrees Fahrenheit converted to Celsius?"}]}]
 
 
@@ -46,7 +58,13 @@ def _converse_stream(client):
     )["stream"]
 
 
-def _assistant_message(content_check):
+def _invoke_model_stream(client):
+    return client.invoke_model_with_response_stream(
+        body=INVOKE_BODY, modelId=INVOKE_MODEL_ID, accept="application/json", contentType="application/json"
+    )["body"]
+
+
+def _assistant_message(content_check, sequence=2):
     return [
         (
             {"type": "LlmChatCompletionMessage"},
@@ -56,7 +74,7 @@ def _assistant_message(content_check):
                 "span_id": None,
                 "trace_id": "trace-id",
                 "completion_id": None,
-                "sequence": 2,
+                "sequence": sequence,
                 "role": "assistant",
                 "is_response": True,
                 "content": content_check,
@@ -68,13 +86,13 @@ def _assistant_message(content_check):
     ]
 
 
-def _validators(name, count, events=None):
+def _validators(name, count, events=None, metric=METRIC):
     def decorator(func):
         func = background_task(name=name)(func)
         func = validate_transaction_metrics(
             name=name,
-            scoped_metrics=[METRIC],
-            rollup_metrics=[METRIC],
+            scoped_metrics=[metric],
+            rollup_metrics=[metric],
             custom_metrics=[(f"Supportability/Python/ML/Bedrock/{BOTOCORE_VERSION}", 1)],
             background_task=True,
         )(func)
@@ -91,6 +109,13 @@ def _read_until_text(stream):
     iterator = iter(stream)
     for event in iterator:
         if "contentBlockDelta" in event:
+            return
+    raise AssertionError("Stream ended before any text was received")
+
+
+def _read_until_invoke_text(stream):
+    for event in stream:
+        if b"content_block_delta" in event["chunk"]["bytes"]:
             return
     raise AssertionError("Stream ended before any text was received")
 
@@ -136,6 +161,72 @@ def test_bedrock_converse_stream_abandoned_after_partial_read(set_trace_info, be
         stream = _converse_stream(bedrock_converse_server)
         _read_until_text(stream)
         del stream
+        gc.collect()
+
+    _test()
+
+
+def test_bedrock_converse_stream_abandoned_never_read(set_trace_info, bedrock_converse_server):
+    @_validators("test_abandoned_never_read", 0)
+    def _test():
+        set_trace_info()
+        _converse_stream(bedrock_converse_server)
+        gc.collect()
+
+    _test()
+
+
+def test_bedrock_invoke_model_stream_full_read_then_close_records_once(set_trace_info, bedrock_server):
+    @_validators("test_invoke_full_read_then_close", 3, metric=INVOKE_METRIC)
+    def _test():
+        set_trace_info()
+        stream = _invoke_model_stream(bedrock_server)
+        for _ in stream:
+            pass
+        stream.close()
+
+    _test()
+
+
+def test_bedrock_invoke_model_stream_close_after_partial_read(set_trace_info, bedrock_server):
+    @_validators(
+        "test_invoke_close_after_partial_read", 3, _assistant_message("212 degrees", sequence=1), INVOKE_METRIC
+    )
+    def _test():
+        set_trace_info()
+        stream = _invoke_model_stream(bedrock_server)
+        _read_until_invoke_text(stream)
+        stream.close()
+
+    _test()
+
+
+def test_bedrock_invoke_model_stream_close_without_reading(set_trace_info, bedrock_server):
+    @_validators("test_invoke_close_without_reading", 2, metric=INVOKE_METRIC)
+    def _test():
+        set_trace_info()
+        _invoke_model_stream(bedrock_server).close()
+
+    _test()
+
+
+def test_bedrock_invoke_model_stream_abandoned_after_partial_read(set_trace_info, bedrock_server):
+    @_validators("test_invoke_abandoned_after_partial_read", 0, metric=INVOKE_METRIC)
+    def _test():
+        set_trace_info()
+        stream = _invoke_model_stream(bedrock_server)
+        _read_until_invoke_text(stream)
+        del stream
+        gc.collect()
+
+    _test()
+
+
+def test_bedrock_invoke_model_stream_abandoned_never_read(set_trace_info, bedrock_server):
+    @_validators("test_invoke_abandoned_never_read", 0, metric=INVOKE_METRIC)
+    def _test():
+        set_trace_info()
+        _invoke_model_stream(bedrock_server)
         gc.collect()
 
     _test()
