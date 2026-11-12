@@ -19,6 +19,7 @@ import re
 import sys
 import time
 import uuid
+import weakref
 from io import BytesIO
 
 from botocore.response import StreamingBody
@@ -853,6 +854,18 @@ def wrap_bedrock_runtime_invoke_model(response_streaming=False):
                 body._nr_ft = ft
                 body._nr_bedrock_attrs = bedrock_attrs
                 body._nr_model_extractor = stream_extractor
+
+                # Register a finalizer so the trace is closed at transaction exit
+                # even if the caller never reads the stream or closes it.
+                _stream_ref = weakref.ref(body)
+                _txn = transaction
+
+                def _finalize_invoke():
+                    s = _stream_ref()
+                    if s is not None:
+                        s.record_events_on_close(transaction=_txn)
+
+                transaction._llm_stream_finalizers.append(_finalize_invoke)
                 return response
 
             # Read and replace response streaming bodies
@@ -970,6 +983,18 @@ def wrap_bedrock_runtime_converse(response_streaming=False):
                 stream._nr_bedrock_attrs = bedrock_attrs
                 stream._nr_model_extractor = stream_extractor
                 stream._nr_is_converse = True
+
+                # Register a finalizer so the trace is closed at transaction exit
+                # even if the caller never reads the stream or closes it.
+                _stream_ref = weakref.ref(stream)
+                _txn = transaction
+
+                def _finalize_converse():
+                    s = _stream_ref()
+                    if s is not None:
+                        s.record_events_on_close(transaction=_txn)
+
+                transaction._llm_stream_finalizers.append(_finalize_converse)
                 return response
 
             ft.__exit__(None, None, None)
@@ -1048,11 +1073,16 @@ def extract_bedrock_converse_attrs(kwargs, response, response_headers, model, sp
 
 
 class BedrockRecordEventMixin:
-    def record_events_on_close(self):
-        """Exit the function trace and record events from the chunks received so far if the stream is closed early."""
+    def record_events_on_close(self, transaction=None):
+        """Exit the function trace and record events from the chunks received so far if the stream is closed early.
+
+        When called from a transaction-exit finalizer the transaction is already stopped and current_transaction()
+        returns None, so the caller passes the transaction explicitly.
+        """
         ft = getattr(self, "_nr_ft", None)
-        transaction = current_transaction()
-        if ft is None or ft.exited or not transaction or ft.transaction is not transaction:
+        if transaction is None:
+            transaction = current_transaction()
+        if ft is None or ft.exited or not transaction:
             return
         self.record_events_on_stop_iteration(transaction, getattr(self, "_nr_request_timestamp", None))
 

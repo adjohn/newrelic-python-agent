@@ -18,6 +18,7 @@ import sys
 import time
 import traceback
 import uuid
+import weakref
 
 import openai
 
@@ -522,6 +523,18 @@ def _handle_completion_success(
             return_val._nr_openai_attrs["temperature"] = kwargs.get("temperature")
             return_val._nr_openai_attrs["max_tokens"] = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
             return_val._nr_openai_attrs["model"] = kwargs.get("model") or kwargs.get("engine")
+
+            # Register a finalizer so the trace is closed at transaction exit
+            # even if the caller never reads the stream or closes it.
+            _stream_ref = weakref.ref(return_val)
+            _txn = transaction
+
+            def _finalize():
+                s = _stream_ref()
+                if s is not None:
+                    _record_events_on_close(s, transaction=_txn)
+
+            transaction._llm_stream_finalizers.append(_finalize)
             return
         except Exception:
             _logger.warning(STREAM_PARSING_FAILURE_LOG_MESSAGE, traceback.format_exception(*sys.exc_info()))
@@ -1294,16 +1307,20 @@ def _record_events_on_stop_iteration(stream_proxy, transaction, request_timestam
                 stream_proxy._nr_openai_attrs.clear()
 
 
-def _record_events_on_close(stream):
+def _record_events_on_close(stream, transaction=None):
     """
     Exit the function trace and record events for a stream closed before it was fully read.
 
     Does nothing if the stream already finished, so the trace is only ever exited once. Events are built from
     the chunks received so far. If no chunk was received there is nothing to record, so only the trace is exited.
+
+    When called from a transaction-exit finalizer the transaction is already stopped and current_transaction()
+    returns None, so the caller passes the transaction explicitly.
     """
     ft = getattr(stream, "_nr_ft", None)
-    transaction = current_transaction()
-    if ft is None or ft.exited or not transaction or ft.transaction is not transaction:
+    if transaction is None:
+        transaction = current_transaction()
+    if ft is None or ft.exited or not transaction:
         return
 
     try:
