@@ -1,0 +1,127 @@
+# Copyright 2010 New Relic, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Tests for Bedrock converse_stream responses that are closed before they are exhausted.
+
+The LLM function trace is entered when ``converse_stream`` is called and normally exited when the event stream is
+exhausted. Closing the stream early must still exit the trace once and record the events built from the chunks
+received so far. If the trace stays open, the transaction can't be completed and is dropped.
+"""
+
+import pytest
+from conftest import BOTOCORE_VERSION
+from testing_support.fixtures import reset_core_stats_engine
+from testing_support.ml_testing_utils import set_trace_info
+from testing_support.validators.validate_custom_event import validate_custom_event_count
+from testing_support.validators.validate_custom_events import validate_custom_events
+from testing_support.validators.validate_transaction_count import validate_transaction_count
+from testing_support.validators.validate_transaction_metrics import validate_transaction_metrics
+
+from newrelic.api.background_task import background_task
+
+METRIC = ("Llm/completion/Bedrock/converse_stream", 1)
+MESSAGE = [{"role": "user", "content": [{"text": "What is 212 degrees Fahrenheit converted to Celsius?"}]}]
+
+
+def _converse_stream(client):
+    return client.converse_stream(
+        modelId="anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=MESSAGE,
+        system=[{"text": "You are a scientist."}],
+        inferenceConfig={"temperature": 0.7, "maxTokens": 100},
+    )["stream"]
+
+
+def _assistant_message(content_check):
+    return [
+        (
+            {"type": "LlmChatCompletionMessage"},
+            {
+                "id": None,
+                "request_id": None,
+                "span_id": None,
+                "trace_id": "trace-id",
+                "completion_id": None,
+                "sequence": 2,
+                "role": "assistant",
+                "is_response": True,
+                "content": content_check,
+                "vendor": "bedrock",
+                "ingest_source": "Python",
+                "response.model": "anthropic.claude-3-sonnet-20240229-v1:0",
+            },
+        )
+    ]
+
+
+def _validators(name, count, events=None):
+    def decorator(func):
+        func = background_task(name=name)(func)
+        func = validate_transaction_metrics(
+            name=name,
+            scoped_metrics=[METRIC],
+            rollup_metrics=[METRIC],
+            custom_metrics=[(f"Supportability/Python/ML/Bedrock/{BOTOCORE_VERSION}", 1)],
+            background_task=True,
+        )(func)
+        func = validate_custom_event_count(count=count)(func)
+        if events:
+            func = validate_custom_events(events)(func)
+        func = validate_transaction_count(1)(func)
+        return reset_core_stats_engine()(func)
+
+    return decorator
+
+
+def _read_until_text(stream):
+    iterator = iter(stream)
+    for event in iterator:
+        if "contentBlockDelta" in event:
+            return
+    raise AssertionError("Stream ended before any text was received")
+
+
+def test_bedrock_converse_stream_full_read_then_close_records_once(set_trace_info, bedrock_converse_server):
+    @_validators("test_full_read_then_close", 4)
+    def _test():
+        set_trace_info()
+        stream = _converse_stream(bedrock_converse_server)
+        for _ in stream:
+            pass
+        stream.close()
+
+    _test()
+
+
+def test_bedrock_converse_stream_close_after_partial_read(set_trace_info, bedrock_converse_server):
+    # Content received so far ("To") is recorded in the assistant message
+    @_validators("test_close_after_partial_read", 4, _assistant_message("To"))
+    def _test():
+        set_trace_info()
+        stream = _converse_stream(bedrock_converse_server)
+        _read_until_text(stream)
+        stream.close()
+
+    _test()
+
+
+def test_bedrock_converse_stream_close_without_reading(set_trace_info, bedrock_converse_server):
+    # Nothing was received, so only the request events are recorded.
+    @_validators("test_close_without_reading", 3)
+    def _test():
+        set_trace_info()
+        _converse_stream(bedrock_converse_server).close()
+
+    _test()

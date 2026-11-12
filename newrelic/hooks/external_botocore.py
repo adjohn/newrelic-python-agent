@@ -1048,8 +1048,17 @@ def extract_bedrock_converse_attrs(kwargs, response, response_headers, model, sp
 
 
 class BedrockRecordEventMixin:
+    def record_events_on_close(self):
+        """Exit the function trace and record events from the chunks received so far if the stream is closed early."""
+        ft = getattr(self, "_nr_ft", None)
+        transaction = current_transaction()
+        if ft is None or ft.exited or not transaction or ft.transaction is not transaction:
+            return
+        self.record_events_on_stop_iteration(transaction, getattr(self, "_nr_request_timestamp", None))
+
     def record_events_on_stop_iteration(self, transaction, request_timestamp=None):
-        if hasattr(self, "_nr_ft"):
+        # The trace may already be exited if the events were recorded by an earlier call or close().
+        if getattr(self, "_nr_ft", None) is not None and not self._nr_ft.exited:
             bedrock_attrs = getattr(self, "_nr_bedrock_attrs", {})
             self._nr_ft.__exit__(None, None, None)
 
@@ -1069,7 +1078,7 @@ class BedrockRecordEventMixin:
             self._nr_bedrock_attrs.clear()
 
     def record_error(self, transaction, exc, request_timestamp=None):
-        if hasattr(self, "_nr_ft"):
+        if getattr(self, "_nr_ft", None) is not None and not self._nr_ft.exited:
             try:
                 ft = self._nr_ft
                 error_attributes = getattr(self, "_nr_bedrock_attrs", {})
@@ -1152,7 +1161,11 @@ class BedrockRecordEventMixin:
             bedrock_attrs["response.choices.finish_reason"] = (event.get("messageStop") or {}).get("stopReason", "")
 
 
-class EventStreamWrapper(ObjectProxy):
+class EventStreamWrapper(BedrockRecordEventMixin, ObjectProxy):
+    def close(self):
+        self.record_events_on_close()
+        return self.__wrapped__.close()
+
     def __iter__(self):
         g = LLMStreamProxy(self.__wrapped__.__iter__())
         g._nr_ft = getattr(self, "_nr_ft", None)
@@ -1188,10 +1201,16 @@ class LLMStreamProxy(BedrockRecordEventMixin, ObjectProxy):
         return return_val
 
     def close(self):
+        self.record_events_on_close()
         return self.__wrapped__.close()
 
 
-class AsyncEventStreamWrapper(ObjectProxy):
+class AsyncEventStreamWrapper(BedrockRecordEventMixin, ObjectProxy):
+    def close(self):
+        # AioEventStream.close() is synchronous
+        self.record_events_on_close()
+        return self.__wrapped__.close()
+
     def __aiter__(self):
         g = AsyncLLMStreamProxy(self.__wrapped__.__aiter__())
         g._nr_ft = getattr(self, "_nr_ft", None)
@@ -1226,6 +1245,7 @@ class AsyncLLMStreamProxy(BedrockRecordEventMixin, ObjectProxy):
         return return_val
 
     async def aclose(self):
+        self.record_events_on_close()
         return await self.__wrapped__.aclose()
 
 
