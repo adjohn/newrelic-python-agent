@@ -333,11 +333,6 @@ class Transaction:
             self._log_events = SampledDataSet(capacity=LOG_EVENT_RESERVOIR_SIZE)
             self._ml_events = SampledDataSet(capacity=ML_EVENT_RESERVOIR_SIZE)
 
-        # Callbacks registered by LLM instrumentation for stream traces that
-        # are opened by hand and may still be open when the transaction exits.
-        # Each entry is a callable that records events and exits the trace.
-        # They are called in reverse order (innermost first) before
-        # complete_root(), so the root becomes the current trace again.
         self._llm_stream_finalizers = []
 
     def _register_llm_stream_finalizer(self, stream, finalize, trace=None):
@@ -436,13 +431,6 @@ class Transaction:
 
         self._state = self.STATE_STOPPED
 
-        # Finalize any LLM stream traces that are still open. Instrumentation
-        # hooks register a callback when they open a trace by hand for a
-        # streaming response. If the caller never reads the stream to the end
-        # or never closes it, the trace stays current and complete_root() would
-        # fail with "not the current trace". Running the finalizers first exits
-        # those traces (innermost first) and records whatever events they have,
-        # so the root becomes the current trace again.
         for finalizer in reversed(self._llm_stream_finalizers):
             try:
                 finalizer()

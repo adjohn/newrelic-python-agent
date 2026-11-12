@@ -12,15 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Tests for aiobotocore Bedrock streaming responses that are closed or abandoned before they are exhausted.
-
-The LLM function trace is entered when ``converse_stream`` or ``invoke_model_with_response_stream`` is called and
-normally exited when the event stream is exhausted. If the caller stops early the trace must still be exited and the
-events built from the chunks received so far recorded. If the trace stays open, the transaction can't be completed and
-is dropped.
-"""
-
 import gc
 import json
 from collections import namedtuple

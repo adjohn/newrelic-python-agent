@@ -12,17 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Tests for OpenAI streams that stop being read before they are exhausted.
-
-The LLM function trace is entered when ``create(stream=True)`` is called and normally exited when the
-stream is exhausted. These tests cover callers that stop early (``break``, ``close()``, ``with``/``async with``),
-which must still exit the trace once and record the events built from what was received. If the trace stays open,
-the transaction can't be completed and is dropped.
-
-These tests replay the same cassette interactions as test_responses_stream.py and test_chat_completion_stream.py.
-"""
-
 import gc
 
 import openai
@@ -45,7 +34,6 @@ LLM_TRACE_METRICS = [("Llm/completion/OpenAI/create", 1)]
 
 
 def _responses_partial_events(events):
-    """Events recorded when the stream is closed after the first text delta but before the terminal event."""
     events = events_sans_llm_metadata(events)
     for _, attrs in events:
         # The model, usage and finish reason only arrive in the terminal event.
@@ -58,7 +46,6 @@ def _responses_partial_events(events):
 
 
 def _chat_partial_events(events):
-    """Events recorded when the stream is closed after the first content chunk but before the final chunk."""
     events = events_sans_llm_metadata(events)
     # The finish reason arrives in the last chunk.
     events[0][1].pop("response.choices.finish_reason")
@@ -118,8 +105,6 @@ async def _aread_until(stream, predicate):
 
 
 def _txn_validators(name, events, count):
-    """Combine validators shared by every test: one transaction, one LLM trace, and the expected events."""
-
     def decorator(func):
         func = background_task()(func)
         func = validate_attributes("agent", ["llm"])(func)
@@ -139,16 +124,12 @@ def _txn_validators(name, events, count):
     return decorator
 
 
-# Responses API
-
-
 @_txn_validators("test_responses_sync_full_read_records_once", responses_full_events, 4)
 def test_responses_sync_full_read_records_once(set_trace_info, sync_openai_client):
     set_trace_info()
     stream = _responses_create(sync_openai_client)
     for _ in stream:
         pass
-    # Closing a stream that already finished must not record anything again.
     stream.close()
 
 
@@ -184,7 +165,6 @@ def test_responses_sync_break_after_completed_with_close(set_trace_info, sync_op
 
 @_txn_validators("test_responses_sync_break_after_completed_without_close", responses_full_events, 4)
 def test_responses_sync_break_after_completed_without_close(set_trace_info, sync_openai_client):
-    # The terminal event carries usage and the full output, so events are recorded without a close().
     set_trace_info()
     _read_until(_responses_create(sync_openai_client), _responses_is_terminal)
 
@@ -227,7 +207,6 @@ def test_responses_async_context_manager_partial_read(set_trace_info, async_open
 
 @_txn_validators("test_responses_async_break_after_completed_with_context_manager", responses_full_events, 4)
 def test_responses_async_break_after_completed_with_context_manager(set_trace_info, async_openai_client, loop):
-    # The Strands pattern: break on response.completed, then close via "async with".
     set_trace_info()
 
     async def _run():
@@ -247,9 +226,6 @@ def test_responses_async_break_after_completed_without_close(set_trace_info, asy
         await _aread_until(await _responses_create(async_openai_client), _responses_is_terminal)
 
     loop.run_until_complete(_run())
-
-
-# Chat Completions API
 
 
 @_txn_validators("test_chat_sync_full_read_records_once", chat_full_events, 4)

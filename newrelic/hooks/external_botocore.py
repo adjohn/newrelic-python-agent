@@ -853,9 +853,6 @@ def wrap_bedrock_runtime_invoke_model(response_streaming=False):
                 body._nr_ft = ft
                 body._nr_bedrock_attrs = bedrock_attrs
                 body._nr_model_extractor = stream_extractor
-
-                # Register a finalizer so the trace is closed at transaction exit
-                # even if the caller never reads the stream or closes it.
                 transaction._register_llm_stream_finalizer(
                     body, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
                 )
@@ -976,9 +973,6 @@ def wrap_bedrock_runtime_converse(response_streaming=False):
                 stream._nr_bedrock_attrs = bedrock_attrs
                 stream._nr_model_extractor = stream_extractor
                 stream._nr_is_converse = True
-
-                # Register a finalizer so the trace is closed at transaction exit
-                # even if the caller never reads the stream or closes it.
                 transaction._register_llm_stream_finalizer(
                     stream, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
                 )
@@ -1061,11 +1055,6 @@ def extract_bedrock_converse_attrs(kwargs, response, response_headers, model, sp
 
 class BedrockRecordEventMixin:
     def record_events_on_close(self, transaction=None):
-        """Exit the function trace and record events from the chunks received so far if the stream is closed early.
-
-        When called from a transaction-exit finalizer the transaction is already stopped and current_transaction()
-        returns None, so the caller passes the transaction explicitly.
-        """
         ft = getattr(self, "_nr_ft", None)
         if transaction is None:
             transaction = current_transaction()
@@ -1074,7 +1063,6 @@ class BedrockRecordEventMixin:
         self.record_events_on_stop_iteration(transaction, getattr(self, "_nr_request_timestamp", None))
 
     def record_events_on_stop_iteration(self, transaction, request_timestamp=None):
-        # The trace may already be exited if the events were recorded by an earlier call or close().
         if getattr(self, "_nr_ft", None) is not None and not self._nr_ft.exited:
             bedrock_attrs = getattr(self, "_nr_bedrock_attrs", {})
             self._nr_ft.__exit__(None, None, None)

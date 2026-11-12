@@ -522,9 +522,6 @@ def _handle_completion_success(
             return_val._nr_openai_attrs["temperature"] = kwargs.get("temperature")
             return_val._nr_openai_attrs["max_tokens"] = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
             return_val._nr_openai_attrs["model"] = kwargs.get("model") or kwargs.get("engine")
-
-            # Register a finalizer so the trace is closed at transaction exit
-            # even if the caller never reads the stream or closes it.
             transaction._register_llm_stream_finalizer(return_val, _record_events_on_close, trace=ft)
             return
         except Exception:
@@ -1162,7 +1159,6 @@ def _record_stream_chunk(stream_proxy, return_val):
     """
     transaction = current_transaction()
     if return_val:
-        # The trace is exited once events are recorded. Ignore any chunks read after that.
         if getattr(getattr(stream_proxy, "_nr_ft", None), "exited", False):
             return
         try:
@@ -1178,8 +1174,6 @@ def _record_stream_chunk(stream_proxy, return_val):
             # Responses API stream events use a different schema than Chat Completions chunks.
             if stream_proxy._nr_openai_attrs.get("_nr_response_api"):
                 _record_responses_stream_event(stream_proxy, return_val)
-                # The terminal event carries the usage and full output. Record now instead of waiting for
-                # the stream to be exhausted, as callers commonly stop reading (or close) right after it.
                 if return_val.get("type") in RESPONSES_TERMINAL_EVENTS:
                     _record_events_on_stop_iteration(stream_proxy, transaction, stream_proxy._nr_request_timestamp)
             else:
@@ -1249,7 +1243,6 @@ def _record_responses_stream_event(stream_proxy, event):
 
 
 def _record_events_on_stop_iteration(stream_proxy, transaction, request_timestamp=None):
-    # Events may already have been recorded by the terminal event or an earlier close().
     if hasattr(stream_proxy, "_nr_ft") and not stream_proxy._nr_ft.exited:
         # We first check for our saved linking metadata before making a new call to get_trace_linking_metadata
         # Directly calling get_trace_linking_metadata() causes the incorrect span ID to be captured and associated with the LLM call
@@ -1299,15 +1292,6 @@ def _record_events_on_stop_iteration(stream_proxy, transaction, request_timestam
 
 
 def _record_events_on_close(stream, transaction=None):
-    """
-    Exit the function trace and record events for a stream closed before it was fully read.
-
-    Does nothing if the stream already finished, so the trace is only ever exited once. Events are built from
-    the chunks received so far. If no chunk was received there is nothing to record, so only the trace is exited.
-
-    When called from a transaction-exit finalizer the transaction is already stopped and current_transaction()
-    returns None, so the caller passes the transaction explicitly.
-    """
     ft = getattr(stream, "_nr_ft", None)
     if transaction is None:
         transaction = current_transaction()
@@ -1316,7 +1300,6 @@ def _record_events_on_close(stream, transaction=None):
 
     try:
         openai_attrs = getattr(stream, "_nr_openai_attrs", {})
-        # response_headers is stored when the first chunk is received.
         if "response_headers" not in openai_attrs:
             ft.__exit__(None, None, None)
             openai_attrs.clear()

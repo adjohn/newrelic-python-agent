@@ -12,15 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Tests for Bedrock streaming responses that are closed or abandoned before they are exhausted.
-
-The LLM function trace is entered when ``converse_stream`` or ``invoke_model_with_response_stream`` is called and
-normally exited when the event stream is exhausted. Closing the stream early must still exit the trace once and record
-the events built from the chunks received so far. If the trace stays open, the transaction can't be completed and is
-dropped.
-"""
-
 import gc
 import json
 
@@ -133,7 +124,6 @@ def test_bedrock_converse_stream_full_read_then_close_records_once(set_trace_inf
 
 
 def test_bedrock_converse_stream_close_after_partial_read(set_trace_info, bedrock_converse_server):
-    # Content received so far ("To") is recorded in the assistant message
     @_validators("test_close_after_partial_read", 4, _assistant_message("To"))
     def _test():
         set_trace_info()
@@ -145,7 +135,6 @@ def test_bedrock_converse_stream_close_after_partial_read(set_trace_info, bedroc
 
 
 def test_bedrock_converse_stream_close_without_reading(set_trace_info, bedrock_converse_server):
-    # Nothing was received, so only the request events are recorded.
     @_validators("test_close_without_reading", 3)
     def _test():
         set_trace_info()
