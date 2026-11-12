@@ -226,3 +226,28 @@ def test_bedrock_invoke_model_stream_abandoned_never_read(set_trace_info, bedroc
         gc.collect()
 
     _test()
+
+
+@pytest.mark.parametrize("api", ["converse", "invoke"])
+def test_bedrock_stream_close_swallows_instrumentation_errors(
+    set_trace_info, bedrock_converse_server, bedrock_server, monkeypatch, api
+):
+    def explode(self, *args, **kwargs):
+        raise RuntimeError("instrumentation failure")
+
+    monkeypatch.setattr(
+        "newrelic.hooks.external_botocore.BedrockRecordEventMixin.record_events_on_stop_iteration", explode
+    )
+
+    @background_task(name="test_close_swallows_instrumentation_errors")
+    def _test():
+        set_trace_info()
+        if api == "converse":
+            stream = _converse_stream(bedrock_converse_server)
+            _read_until_text(stream)
+        else:
+            stream = _invoke_model_stream(bedrock_server)
+            _read_until_invoke_text(stream)
+        stream.close()
+
+    _test()

@@ -228,3 +228,27 @@ def test_bedrock_async_stream_abandoned_never_read(loop, client, api, set_trace_
         loop.run_until_complete(coro())
 
     _test()
+
+
+def test_bedrock_async_stream_close_swallows_instrumentation_errors(loop, client, api, set_trace_info, monkeypatch):
+    def explode(self, *args, **kwargs):
+        raise RuntimeError("instrumentation failure")
+
+    monkeypatch.setattr(
+        "newrelic.hooks.external_botocore.BedrockRecordEventMixin.record_events_on_stop_iteration", explode
+    )
+
+    @background_task(name="test_async_close_swallows_instrumentation_errors")
+    def _test():
+        set_trace_info()
+
+        async def coro():
+            stream = await api.create(client)
+            iterator = stream.__aiter__()
+            await _read_until_text(iterator, api)
+            stream.close()
+            await iterator.aclose()
+
+        loop.run_until_complete(coro())
+
+    _test()
