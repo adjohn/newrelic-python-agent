@@ -16,7 +16,7 @@ from newrelic.common.object_wrapper import function_wrapper, transient_function_
 from testing_support.fixtures import catch_background_exceptions
 
 
-def validate_llm_stream_timing():
+def validate_llm_stream_timing(time_to_first_token=True):
     """Assert LLM summary events carry timestamp and time_to_first_token and every request message carries a timestamp."""
 
     @function_wrapper
@@ -36,7 +36,7 @@ def validate_llm_stream_timing():
         messages = [e for e in recorded_events if e[0]["type"] == "LlmChatCompletionMessage"]
         assert len(summaries) == 1, f"Expected 1 summary, got {len(summaries)}"
         assert summaries[0][1].get("timestamp") is not None, f"summary missing timestamp: {summaries[0][1]}"
-        assert summaries[0][1].get("time_to_first_token") is not None, (
+        assert not time_to_first_token or summaries[0][1].get("time_to_first_token") is not None, (
             f"summary missing time_to_first_token: {summaries[0][1]}"
         )
         for message in messages:

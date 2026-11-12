@@ -86,7 +86,7 @@ def _assistant_message(content_check, sequence=2):
     ]
 
 
-def _validators(name, count, events=None, metric=METRIC, timing=False):
+def _validators(name, count, events=None, metric=METRIC, timing=False, time_to_first_token=True):
     def decorator(func):
         func = background_task(name=name)(func)
         func = validate_transaction_metrics(
@@ -100,7 +100,7 @@ def _validators(name, count, events=None, metric=METRIC, timing=False):
         if events:
             func = validate_custom_events(events)(func)
         if timing:
-            func = validate_llm_stream_timing()(func)
+            func = validate_llm_stream_timing(time_to_first_token)(func)
         func = validate_transaction_count(1)(func)
         return reset_core_stats_engine()(func)
 
@@ -146,7 +146,7 @@ def test_bedrock_converse_stream_close_after_partial_read(set_trace_info, bedroc
 
 
 def test_bedrock_converse_stream_close_without_reading(set_trace_info, bedrock_converse_server):
-    @_validators("test_close_without_reading", 3)
+    @_validators("test_close_without_reading", 3, timing=True, time_to_first_token=False)
     def _test():
         set_trace_info()
         _converse_stream(bedrock_converse_server).close()
@@ -206,7 +206,7 @@ def test_bedrock_invoke_model_stream_close_after_partial_read(set_trace_info, be
 
 
 def test_bedrock_invoke_model_stream_close_without_reading(set_trace_info, bedrock_server):
-    @_validators("test_invoke_close_without_reading", 2, metric=INVOKE_METRIC)
+    @_validators("test_invoke_close_without_reading", 2, metric=INVOKE_METRIC, timing=True, time_to_first_token=False)
     def _test():
         set_trace_info()
         _invoke_model_stream(bedrock_server).close()
@@ -241,13 +241,14 @@ def test_bedrock_stream_close_swallows_instrumentation_errors(
     set_trace_info, bedrock_converse_server, bedrock_server, monkeypatch, api
 ):
     def explode(self, *args, **kwargs):
-        self._nr_ft.__exit__(None, None, None)
         raise RuntimeError("instrumentation failure")
 
     monkeypatch.setattr(
         "newrelic.hooks.external_botocore.BedrockRecordEventMixin.record_events_on_stop_iteration", explode
     )
 
+    @reset_core_stats_engine()
+    @validate_transaction_count(1)
     @background_task(name="test_close_swallows_instrumentation_errors")
     def _test():
         set_trace_info()

@@ -16,8 +16,12 @@ import gc
 import logging
 import weakref
 
+from testing_support.fixtures import reset_core_stats_engine
+from testing_support.validators.validate_transaction_count import validate_transaction_count
+
 from newrelic.api.application import application_instance
 from newrelic.api.background_task import BackgroundTask
+from newrelic.api.function_trace import FunctionTrace
 
 
 class Stream:
@@ -60,3 +64,19 @@ def test_failing_finalizer_is_logged_and_does_not_stop_others(caplog):
 
     assert calls == ["ok"]
     assert any(r.exc_info and "finalizer failure" in str(r.exc_info[1]) for r in caplog.records)
+
+
+@reset_core_stats_engine()
+@validate_transaction_count(1)
+def test_failing_finalizer_on_live_stream_still_exits_trace():
+    stream = Stream()
+
+    def boom(stream, transaction):
+        raise RuntimeError("finalizer failure")
+
+    with BackgroundTask(application_instance(), "test_failing_finalizer_on_live_stream") as txn:
+        trace = FunctionTrace("llm_stream")
+        trace.__enter__()
+        txn._register_llm_stream_finalizer(stream, boom, trace=trace)
+
+    assert trace.exited

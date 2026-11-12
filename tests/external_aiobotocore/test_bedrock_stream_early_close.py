@@ -113,7 +113,7 @@ def _assistant_message(api):
     ]
 
 
-def _validators(name, api, count, events=None, timing=False):
+def _validators(name, api, count, events=None, timing=False, time_to_first_token=True):
     def decorator(func):
         func = background_task(name=name)(func)
         func = validate_transaction_metrics(
@@ -127,7 +127,7 @@ def _validators(name, api, count, events=None, timing=False):
         if events:
             func = validate_custom_events(events)(func)
         if timing:
-            func = validate_llm_stream_timing()(func)
+            func = validate_llm_stream_timing(time_to_first_token)(func)
         func = validate_transaction_count(1)(func)
         return reset_core_stats_engine()(func)
 
@@ -173,7 +173,7 @@ def test_bedrock_async_stream_aclose_after_partial_read(loop, client, api, set_t
 
 
 def test_bedrock_async_stream_close_without_reading(loop, client, api, set_trace_info):
-    @_validators("test_async_close_without_reading", api, api.request_events)
+    @_validators("test_async_close_without_reading", api, api.request_events, timing=True, time_to_first_token=False)
     def _test():
         set_trace_info()
 
@@ -232,13 +232,14 @@ def test_bedrock_async_stream_abandoned_never_read(loop, client, api, set_trace_
 
 def test_bedrock_async_stream_close_swallows_instrumentation_errors(loop, client, api, set_trace_info, monkeypatch):
     def explode(self, *args, **kwargs):
-        self._nr_ft.__exit__(None, None, None)
         raise RuntimeError("instrumentation failure")
 
     monkeypatch.setattr(
         "newrelic.hooks.external_botocore.BedrockRecordEventMixin.record_events_on_stop_iteration", explode
     )
 
+    @reset_core_stats_engine()
+    @validate_transaction_count(1)
     @background_task(name="test_async_close_swallows_instrumentation_errors")
     def _test():
         set_trace_info()
