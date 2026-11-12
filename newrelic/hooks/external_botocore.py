@@ -19,7 +19,6 @@ import re
 import sys
 import time
 import uuid
-import weakref
 from io import BytesIO
 
 from botocore.response import StreamingBody
@@ -857,15 +856,7 @@ def wrap_bedrock_runtime_invoke_model(response_streaming=False):
 
                 # Register a finalizer so the trace is closed at transaction exit
                 # even if the caller never reads the stream or closes it.
-                _stream_ref = weakref.ref(body)
-                _txn = transaction
-
-                def _finalize_invoke():
-                    s = _stream_ref()
-                    if s is not None:
-                        s.record_events_on_close(transaction=_txn)
-
-                transaction._llm_stream_finalizers.append(_finalize_invoke)
+                transaction._register_llm_stream_finalizer(body, lambda s, t: s.record_events_on_close(transaction=t))
                 return response
 
             # Read and replace response streaming bodies
@@ -986,15 +977,7 @@ def wrap_bedrock_runtime_converse(response_streaming=False):
 
                 # Register a finalizer so the trace is closed at transaction exit
                 # even if the caller never reads the stream or closes it.
-                _stream_ref = weakref.ref(stream)
-                _txn = transaction
-
-                def _finalize_converse():
-                    s = _stream_ref()
-                    if s is not None:
-                        s.record_events_on_close(transaction=_txn)
-
-                transaction._llm_stream_finalizers.append(_finalize_converse)
+                transaction._register_llm_stream_finalizer(stream, lambda s, t: s.record_events_on_close(transaction=t))
                 return response
 
             ft.__exit__(None, None, None)

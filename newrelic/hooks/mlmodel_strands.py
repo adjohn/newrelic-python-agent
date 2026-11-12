@@ -117,6 +117,7 @@ def wrap_stream_async(wrapped, instance, args, kwargs):
         proxied_return_val._nr_ft = ft
         proxied_return_val._nr_metadata = linking_metadata
         proxied_return_val._nr_strands_attrs = {"agent_name": agent_name, "agent_id": agent_id}
+        transaction._register_llm_stream_finalizer(proxied_return_val, AsyncLLMStreamProxy._nr_finalize, trace=ft)
         return proxied_return_val
     except Exception:
         # If proxy creation fails, clean up the function trace and return original value
@@ -406,6 +407,7 @@ def wrap_tool_executor__stream(wrapped, instance, args, kwargs):
             "tool_input": tool_input,
             "agent_name": agent_name,
         }
+        transaction._register_llm_stream_finalizer(proxied_return_val, AsyncLLMStreamProxy._nr_finalize, trace=ft)
         return proxied_return_val
     except Exception:
         # If proxy creation fails, clean up the function trace and return original value

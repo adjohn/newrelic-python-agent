@@ -340,6 +340,18 @@ class Transaction:
         # complete_root(), so the root becomes the current trace again.
         self._llm_stream_finalizers = []
 
+    def _register_llm_stream_finalizer(self, stream, finalize, trace=None):
+        stream_ref = weakref.ref(stream)
+
+        def _finalizer():
+            stream = stream_ref()
+            if stream is not None:
+                finalize(stream, self)
+            elif trace is not None and not trace.exited:
+                trace.__exit__(None, None, None)
+
+        self._llm_stream_finalizers.append(_finalizer)
+
     def __del__(self):
         self._dead = True
         if self._state == self.STATE_RUNNING:

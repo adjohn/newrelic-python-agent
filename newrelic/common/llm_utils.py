@@ -150,6 +150,11 @@ class AsyncLLMStreamProxy(ObjectProxy):
         else:
             return return_val
 
+    def _nr_finalize(self, transaction):
+        if not self._nr_closed:
+            self._nr_closed = True
+            self._nr_on_stop_iteration(self, transaction)
+
     async def aclose(self):
         if self._nr_closed:
             # If we already sent the related events, we can just call aclose as there's nothing left to do.

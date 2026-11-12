@@ -18,7 +18,6 @@ import sys
 import time
 import traceback
 import uuid
-import weakref
 
 import openai
 
@@ -526,15 +525,7 @@ def _handle_completion_success(
 
             # Register a finalizer so the trace is closed at transaction exit
             # even if the caller never reads the stream or closes it.
-            _stream_ref = weakref.ref(return_val)
-            _txn = transaction
-
-            def _finalize():
-                s = _stream_ref()
-                if s is not None:
-                    _record_events_on_close(s, transaction=_txn)
-
-            transaction._llm_stream_finalizers.append(_finalize)
+            transaction._register_llm_stream_finalizer(return_val, _record_events_on_close)
             return
         except Exception:
             _logger.warning(STREAM_PARSING_FAILURE_LOG_MESSAGE, traceback.format_exception(*sys.exc_info()))
