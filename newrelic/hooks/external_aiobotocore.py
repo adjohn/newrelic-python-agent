@@ -160,6 +160,7 @@ async def wrap_client__make_api_call(wrapped, instance, args, kwargs):
                 stream._nr_bedrock_attrs = bedrock_attrs or {}
                 stream._nr_model_extractor = stream_extractor or None
                 stream._nr_is_converse = True
+                stream._nr_request_timestamp = request_timestamp
                 if ft:
                     transaction._register_llm_stream_finalizer(
                         stream, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
@@ -184,6 +185,7 @@ async def wrap_client__make_api_call(wrapped, instance, args, kwargs):
                 body._nr_ft = ft or None
                 body._nr_bedrock_attrs = bedrock_attrs or {}
                 body._nr_model_extractor = stream_extractor or None
+                body._nr_request_timestamp = request_timestamp
                 if ft:
                     transaction._register_llm_stream_finalizer(
                         body, lambda s, t: s.record_events_on_close(transaction=t), trace=ft

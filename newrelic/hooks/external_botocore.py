@@ -853,6 +853,7 @@ def wrap_bedrock_runtime_invoke_model(response_streaming=False):
                 body._nr_ft = ft
                 body._nr_bedrock_attrs = bedrock_attrs
                 body._nr_model_extractor = stream_extractor
+                body._nr_request_timestamp = request_timestamp
                 transaction._register_llm_stream_finalizer(
                     body, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
                 )
@@ -973,6 +974,7 @@ def wrap_bedrock_runtime_converse(response_streaming=False):
                 stream._nr_bedrock_attrs = bedrock_attrs
                 stream._nr_model_extractor = stream_extractor
                 stream._nr_is_converse = True
+                stream._nr_request_timestamp = request_timestamp
                 transaction._register_llm_stream_finalizer(
                     stream, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
                 )

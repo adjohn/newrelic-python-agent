@@ -340,10 +340,12 @@ class Transaction:
 
         def _finalizer(transaction):
             stream = stream_ref()
-            if stream is not None:
-                finalize(stream, transaction)
-            elif trace is not None and not trace.exited:
-                trace.__exit__(None, None, None)
+            try:
+                if stream is not None:
+                    finalize(stream, transaction)
+            finally:
+                if trace is not None and not trace.exited:
+                    trace.__exit__(None, None, None)
 
         self._llm_stream_finalizers.append(_finalizer)
 
