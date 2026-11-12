@@ -856,7 +856,9 @@ def wrap_bedrock_runtime_invoke_model(response_streaming=False):
 
                 # Register a finalizer so the trace is closed at transaction exit
                 # even if the caller never reads the stream or closes it.
-                transaction._register_llm_stream_finalizer(body, lambda s, t: s.record_events_on_close(transaction=t))
+                transaction._register_llm_stream_finalizer(
+                    body, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
+                )
                 return response
 
             # Read and replace response streaming bodies
@@ -977,7 +979,9 @@ def wrap_bedrock_runtime_converse(response_streaming=False):
 
                 # Register a finalizer so the trace is closed at transaction exit
                 # even if the caller never reads the stream or closes it.
-                transaction._register_llm_stream_finalizer(stream, lambda s, t: s.record_events_on_close(transaction=t))
+                transaction._register_llm_stream_finalizer(
+                    stream, lambda s, t: s.record_events_on_close(transaction=t), trace=ft
+                )
                 return response
 
             ft.__exit__(None, None, None)

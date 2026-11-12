@@ -525,7 +525,7 @@ def _handle_completion_success(
 
             # Register a finalizer so the trace is closed at transaction exit
             # even if the caller never reads the stream or closes it.
-            transaction._register_llm_stream_finalizer(return_val, _record_events_on_close)
+            transaction._register_llm_stream_finalizer(return_val, _record_events_on_close, trace=ft)
             return
         except Exception:
             _logger.warning(STREAM_PARSING_FAILURE_LOG_MESSAGE, traceback.format_exception(*sys.exc_info()))
