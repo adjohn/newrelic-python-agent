@@ -35,6 +35,7 @@ OPENAI_V1 = OPENAI_VERSION_TUPLE >= (1,)
 EXCEPTION_HANDLING_FAILURE_LOG_MESSAGE = "Exception occurred in openai instrumentation: While reporting an exception in openai, another exception occurred. Report this issue to New Relic Support.\n%s"
 RECORD_EVENTS_FAILURE_LOG_MESSAGE = "Exception occurred in OpenAI instrumentation: Failed to record LLM events. Please report this issue to New Relic Support.\n%s"
 STREAM_PARSING_FAILURE_LOG_MESSAGE = "Exception occurred in OpenAI instrumentation: Failed to process event stream information. Please report this issue to New Relic Support.\n%s"
+RESPONSES_TERMINAL_EVENTS = ("response.completed", "response.incomplete", "response.failed")
 
 _logger = logging.getLogger(__name__)
 
@@ -513,6 +514,7 @@ def _handle_completion_success(
             # generator.
             return_val._nr_ft = ft
             return_val._nr_metadata = linking_metadata
+            return_val._nr_request_timestamp = request_timestamp
             return_val._nr_openai_attrs = getattr(return_val, "_nr_openai_attrs", {})
             # Marker so _record_stream_chunk parses Responses events instead of Chat Completions chunks.
             return_val._nr_openai_attrs["_nr_response_api"] = responses_api
@@ -1144,6 +1146,7 @@ class LLMStreamProxy(ObjectProxy):
         return return_val
 
     def close(self):
+        _record_events_on_close(self)
         return self.__wrapped__.close()
 
 
@@ -1155,6 +1158,9 @@ def _record_stream_chunk(stream_proxy, return_val):
     """
     transaction = current_transaction()
     if return_val:
+        # The trace is exited once events are recorded. Ignore any chunks read after that.
+        if getattr(getattr(stream_proxy, "_nr_ft", None), "exited", False):
+            return
         try:
             if OPENAI_V1:
                 if getattr(return_val, "data", "").startswith("[DONE]"):
@@ -1168,6 +1174,10 @@ def _record_stream_chunk(stream_proxy, return_val):
             # Responses API stream events use a different schema than Chat Completions chunks.
             if stream_proxy._nr_openai_attrs.get("_nr_response_api"):
                 _record_responses_stream_event(stream_proxy, return_val)
+                # The terminal event carries the usage and full output. Record now instead of waiting for
+                # the stream to be exhausted, as callers commonly stop reading (or close) right after it.
+                if return_val.get("type") in RESPONSES_TERMINAL_EVENTS:
+                    _record_events_on_stop_iteration(stream_proxy, transaction, stream_proxy._nr_request_timestamp)
             else:
                 _record_chat_completion_stream_event(stream_proxy, return_val)
         except Exception:
@@ -1225,7 +1235,7 @@ def _record_responses_stream_event(stream_proxy, event):
             )
         stream_proxy._nr_openai_attrs["content"] = stream_proxy._nr_openai_attrs.get("content", "") + delta
         stream_proxy._nr_openai_attrs["role"] = stream_proxy._nr_openai_attrs.get("role") or "assistant"
-    elif event_type in ("response.completed", "response.incomplete", "response.failed"):
+    elif event_type in RESPONSES_TERMINAL_EVENTS:
         response = _responses_api_response_attrs(event.get("response") or {})
         stream_proxy._nr_openai_attrs["response.model"] = response["response.model"]
         stream_proxy._nr_openai_attrs["id"] = response["id"]
@@ -1235,7 +1245,8 @@ def _record_responses_stream_event(stream_proxy, event):
 
 
 def _record_events_on_stop_iteration(stream_proxy, transaction, request_timestamp=None):
-    if hasattr(stream_proxy, "_nr_ft"):
+    # Events may already have been recorded by the terminal event or an earlier close().
+    if hasattr(stream_proxy, "_nr_ft") and not stream_proxy._nr_ft.exited:
         # We first check for our saved linking metadata before making a new call to get_trace_linking_metadata
         # Directly calling get_trace_linking_metadata() causes the incorrect span ID to be captured and associated with the LLM call
         # This leads to incorrect linking of the LLM call in the UI
@@ -1283,8 +1294,32 @@ def _record_events_on_stop_iteration(stream_proxy, transaction, request_timestam
                 stream_proxy._nr_openai_attrs.clear()
 
 
+def _record_events_on_close(stream):
+    """
+    Exit the function trace and record events for a stream closed before it was fully read.
+
+    Does nothing if the stream already finished, so the trace is only ever exited once. Events are built from
+    the chunks received so far. If no chunk was received there is nothing to record, so only the trace is exited.
+    """
+    ft = getattr(stream, "_nr_ft", None)
+    transaction = current_transaction()
+    if ft is None or ft.exited or not transaction or ft.transaction is not transaction:
+        return
+
+    try:
+        openai_attrs = getattr(stream, "_nr_openai_attrs", {})
+        # response_headers is stored when the first chunk is received.
+        if "response_headers" not in openai_attrs:
+            ft.__exit__(None, None, None)
+            openai_attrs.clear()
+            return
+        _record_events_on_stop_iteration(stream, transaction, getattr(stream, "_nr_request_timestamp", None))
+    except Exception:
+        _logger.warning(RECORD_EVENTS_FAILURE_LOG_MESSAGE, traceback.format_exception(*sys.exc_info()))
+
+
 def _handle_streaming_completion_error(*, stream_proxy, transaction, exc, request_timestamp=None):
-    if hasattr(stream_proxy, "_nr_ft"):
+    if hasattr(stream_proxy, "_nr_ft") and not stream_proxy._nr_ft.exited:
         openai_attrs = getattr(stream_proxy, "_nr_openai_attrs", {})
 
         # If there are no openai attrs exit early as there's no data to record.
@@ -1333,6 +1368,7 @@ class AsyncLLMStreamProxy(ObjectProxy):
         return return_val
 
     async def aclose(self):
+        _record_events_on_close(self)
         return await self.__wrapped__.aclose()
 
 
@@ -1364,6 +1400,18 @@ def wrap_stream_iter_events_async(wrapped, instance, args, kwargs):
     proxied_return_val = AsyncLLMStreamProxy(return_val)
     set_attrs_on_generator_proxy(proxied_return_val, instance)
     return proxied_return_val
+
+
+def wrap_stream_close_sync(wrapped, instance, args, kwargs):
+    # Stream.__exit__ calls close(), so this covers the "with" form as well.
+    _record_events_on_close(instance)
+    return wrapped(*args, **kwargs)
+
+
+async def wrap_stream_close_async(wrapped, instance, args, kwargs):
+    # AsyncStream.aclose() and AsyncStream.__aexit__ both await close().
+    _record_events_on_close(instance)
+    return await wrapped(*args, **kwargs)
 
 
 def set_attrs_on_generator_proxy(proxy, instance):
@@ -1511,6 +1559,10 @@ def instrument_openai__streaming(module):
     if hasattr(module, "Stream"):
         if hasattr(module.Stream, "_iter_events"):
             wrap_function_wrapper(module, "Stream._iter_events", wrap_stream_iter_events_sync)
+        if hasattr(module.Stream, "close"):
+            wrap_function_wrapper(module, "Stream.close", wrap_stream_close_sync)
     if hasattr(module, "AsyncStream"):
         if hasattr(module.AsyncStream, "_iter_events"):
             wrap_function_wrapper(module, "AsyncStream._iter_events", wrap_stream_iter_events_async)
+        if hasattr(module.AsyncStream, "close"):
+            wrap_function_wrapper(module, "AsyncStream.close", wrap_stream_close_async)
