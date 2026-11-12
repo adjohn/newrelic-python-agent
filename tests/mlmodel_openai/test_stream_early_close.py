@@ -23,6 +23,8 @@ the transaction can't be completed and is dropped.
 These tests replay the same cassette interactions as test_responses_stream.py and test_chat_completion_stream.py.
 """
 
+import gc
+
 import openai
 import pytest
 from conftest import OPENAI_VERSION
@@ -314,3 +316,21 @@ def test_chat_async_context_manager_partial_read(set_trace_info, async_openai_cl
             await _aread_until(stream, _chat_has_content)
 
     loop.run_until_complete(_run())
+
+
+@_txn_validators("test_chat_sync_abandoned_after_partial_read", None, 0)
+def test_chat_sync_abandoned_after_partial_read(set_trace_info, sync_openai_client):
+    set_trace_info()
+    stream = _chat_create(sync_openai_client)
+    _read_until(stream, _chat_has_content)
+    del stream
+    gc.collect()
+
+
+@_txn_validators("test_responses_sync_abandoned_after_partial_read", None, 0)
+def test_responses_sync_abandoned_after_partial_read(set_trace_info, sync_openai_client):
+    set_trace_info()
+    stream = _responses_create(sync_openai_client)
+    _read_until(stream, _responses_is_text)
+    del stream
+    gc.collect()

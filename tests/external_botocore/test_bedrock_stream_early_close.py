@@ -20,6 +20,8 @@ exhausted. Closing the stream early must still exit the trace once and record th
 received so far. If the trace stays open, the transaction can't be completed and is dropped.
 """
 
+import gc
+
 import pytest
 from conftest import BOTOCORE_VERSION
 from testing_support.fixtures import reset_core_stats_engine
@@ -123,5 +125,17 @@ def test_bedrock_converse_stream_close_without_reading(set_trace_info, bedrock_c
     def _test():
         set_trace_info()
         _converse_stream(bedrock_converse_server).close()
+
+    _test()
+
+
+def test_bedrock_converse_stream_abandoned_after_partial_read(set_trace_info, bedrock_converse_server):
+    @_validators("test_abandoned_after_partial_read", 0)
+    def _test():
+        set_trace_info()
+        stream = _converse_stream(bedrock_converse_server)
+        _read_until_text(stream)
+        del stream
+        gc.collect()
 
     _test()
