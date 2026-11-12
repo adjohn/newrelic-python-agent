@@ -21,6 +21,7 @@ from testing_support.fixtures import reset_core_stats_engine
 from testing_support.ml_testing_utils import set_trace_info
 from testing_support.validators.validate_custom_event import validate_custom_event_count
 from testing_support.validators.validate_custom_events import validate_custom_events
+from testing_support.validators.validate_llm_stream_timing import validate_llm_stream_timing
 from testing_support.validators.validate_transaction_count import validate_transaction_count
 from testing_support.validators.validate_transaction_metrics import validate_transaction_metrics
 
@@ -77,7 +78,7 @@ def _assistant_message(content_check, sequence=2):
     ]
 
 
-def _validators(name, count, events=None, metric=METRIC):
+def _validators(name, count, events=None, metric=METRIC, timing=False):
     def decorator(func):
         func = background_task(name=name)(func)
         func = validate_transaction_metrics(
@@ -90,6 +91,8 @@ def _validators(name, count, events=None, metric=METRIC):
         func = validate_custom_event_count(count=count)(func)
         if events:
             func = validate_custom_events(events)(func)
+        if timing:
+            func = validate_llm_stream_timing()(func)
         func = validate_transaction_count(1)(func)
         return reset_core_stats_engine()(func)
 
@@ -124,7 +127,7 @@ def test_bedrock_converse_stream_full_read_then_close_records_once(set_trace_inf
 
 
 def test_bedrock_converse_stream_close_after_partial_read(set_trace_info, bedrock_converse_server):
-    @_validators("test_close_after_partial_read", 4, _assistant_message("To"))
+    @_validators("test_close_after_partial_read", 4, _assistant_message("To"), timing=True)
     def _test():
         set_trace_info()
         stream = _converse_stream(bedrock_converse_server)
@@ -179,7 +182,11 @@ def test_bedrock_invoke_model_stream_full_read_then_close_records_once(set_trace
 
 def test_bedrock_invoke_model_stream_close_after_partial_read(set_trace_info, bedrock_server):
     @_validators(
-        "test_invoke_close_after_partial_read", 3, _assistant_message("212 degrees", sequence=1), INVOKE_METRIC
+        "test_invoke_close_after_partial_read",
+        3,
+        _assistant_message("212 degrees", sequence=1),
+        INVOKE_METRIC,
+        timing=True,
     )
     def _test():
         set_trace_info()

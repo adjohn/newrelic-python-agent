@@ -22,6 +22,7 @@ from testing_support.fixtures import reset_core_stats_engine
 from testing_support.ml_testing_utils import set_trace_info
 from testing_support.validators.validate_custom_event import validate_custom_event_count
 from testing_support.validators.validate_custom_events import validate_custom_events
+from testing_support.validators.validate_llm_stream_timing import validate_llm_stream_timing
 from testing_support.validators.validate_transaction_count import validate_transaction_count
 from testing_support.validators.validate_transaction_metrics import validate_transaction_metrics
 
@@ -112,7 +113,7 @@ def _assistant_message(api):
     ]
 
 
-def _validators(name, api, count, events=None):
+def _validators(name, api, count, events=None, timing=False):
     def decorator(func):
         func = background_task(name=name)(func)
         func = validate_transaction_metrics(
@@ -125,6 +126,8 @@ def _validators(name, api, count, events=None):
         func = validate_custom_event_count(count=count)(func)
         if events:
             func = validate_custom_events(events)(func)
+        if timing:
+            func = validate_llm_stream_timing()(func)
         func = validate_transaction_count(1)(func)
         return reset_core_stats_engine()(func)
 
@@ -139,7 +142,7 @@ async def _read_until_text(stream, api):
 
 
 def test_bedrock_async_stream_close_after_partial_read(loop, client, api, set_trace_info):
-    @_validators("test_async_close_after_partial_read", api, api.partial_events, _assistant_message(api))
+    @_validators("test_async_close_after_partial_read", api, api.partial_events, _assistant_message(api), timing=True)
     def _test():
         set_trace_info()
 
@@ -154,7 +157,7 @@ def test_bedrock_async_stream_close_after_partial_read(loop, client, api, set_tr
 
 
 def test_bedrock_async_stream_aclose_after_partial_read(loop, client, api, set_trace_info):
-    @_validators("test_async_aclose_after_partial_read", api, api.partial_events, _assistant_message(api))
+    @_validators("test_async_aclose_after_partial_read", api, api.partial_events, _assistant_message(api), timing=True)
     def _test():
         set_trace_info()
 
@@ -183,7 +186,7 @@ def test_bedrock_async_stream_close_without_reading(loop, client, api, set_trace
 
 
 def test_bedrock_async_stream_break_without_close(loop, client, api, set_trace_info):
-    @_validators("test_async_break_without_close", api, api.partial_events, _assistant_message(api))
+    @_validators("test_async_break_without_close", api, api.partial_events, _assistant_message(api), timing=True)
     def _test():
         set_trace_info()
 
