@@ -1060,7 +1060,10 @@ class BedrockRecordEventMixin:
             transaction = current_transaction()
         if ft is None or ft.exited or not transaction:
             return
-        self.record_events_on_stop_iteration(transaction, getattr(self, "_nr_request_timestamp", None))
+        try:
+            self.record_events_on_stop_iteration(transaction, getattr(self, "_nr_request_timestamp", None))
+        except Exception:
+            _logger.warning(RESPONSE_PROCESSING_FAILURE_LOG_MESSAGE, exc_info=True)
 
     def record_events_on_stop_iteration(self, transaction, request_timestamp=None):
         if getattr(self, "_nr_ft", None) is not None and not self._nr_ft.exited:
