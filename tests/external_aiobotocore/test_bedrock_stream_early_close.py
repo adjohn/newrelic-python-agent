@@ -232,6 +232,7 @@ def test_bedrock_async_stream_abandoned_never_read(loop, client, api, set_trace_
 
 def test_bedrock_async_stream_close_swallows_instrumentation_errors(loop, client, api, set_trace_info, monkeypatch):
     def explode(self, *args, **kwargs):
+        self._nr_ft.__exit__(None, None, None)
         raise RuntimeError("instrumentation failure")
 
     monkeypatch.setattr(

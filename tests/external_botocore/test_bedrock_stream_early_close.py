@@ -41,6 +41,14 @@ INVOKE_BODY = json.dumps(
 MESSAGE = [{"role": "user", "content": [{"text": "What is 212 degrees Fahrenheit converted to Celsius?"}]}]
 
 
+@pytest.fixture
+def held_streams():
+    """Keeps streams referenced until after the transaction exits."""
+    streams = []
+    yield streams
+    streams.clear()
+
+
 def _converse_stream(client):
     return client.converse_stream(
         modelId="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -233,6 +241,7 @@ def test_bedrock_stream_close_swallows_instrumentation_errors(
     set_trace_info, bedrock_converse_server, bedrock_server, monkeypatch, api
 ):
     def explode(self, *args, **kwargs):
+        self._nr_ft.__exit__(None, None, None)
         raise RuntimeError("instrumentation failure")
 
     monkeypatch.setattr(
@@ -249,5 +258,33 @@ def test_bedrock_stream_close_swallows_instrumentation_errors(
             stream = _invoke_model_stream(bedrock_server)
             _read_until_invoke_text(stream)
         stream.close()
+
+    _test()
+
+
+def test_bedrock_converse_stream_break_without_close_while_held(set_trace_info, bedrock_converse_server, held_streams):
+    @_validators("test_break_without_close_while_held", 4, _assistant_message("To"), timing=True)
+    def _test():
+        set_trace_info()
+        stream = _converse_stream(bedrock_converse_server)
+        held_streams.append(stream)
+        _read_until_text(stream)
+
+    _test()
+
+
+def test_bedrock_invoke_model_stream_break_without_close_while_held(set_trace_info, bedrock_server, held_streams):
+    @_validators(
+        "test_invoke_break_without_close_while_held",
+        3,
+        _assistant_message("212 degrees", sequence=1),
+        INVOKE_METRIC,
+        timing=True,
+    )
+    def _test():
+        set_trace_info()
+        stream = _invoke_model_stream(bedrock_server)
+        held_streams.append(stream)
+        _read_until_invoke_text(stream)
 
     _test()
