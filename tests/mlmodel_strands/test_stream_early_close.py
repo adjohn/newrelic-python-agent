@@ -17,6 +17,8 @@ import asyncio
 import pytest
 from strands import Agent, tool
 from testing_support.fixtures import dt_enabled, reset_core_stats_engine
+from testing_support.validators.validate_custom_event import validate_custom_event_count
+from testing_support.validators.validate_custom_events import validate_custom_events
 from testing_support.validators.validate_span_events import validate_span_events
 from testing_support.validators.validate_transaction_metrics import validate_transaction_metrics
 
@@ -24,12 +26,22 @@ from newrelic.api.background_task import background_task
 
 from ._mock_model_provider import MockedModelProvider
 from ._test_agents import add_exclamation, single_tool_model
+from .test_agents import agent_recorded_event
+from .test_tools import tool_recorded_event
 
 AGENT_METRIC = "Llm/agent/Strands/strands.agent.agent:Agent.stream_async/my_agent"
 TOOL_METRIC = "Llm/tool/Strands/strands.tools.executors._executor:ToolExecutor._stream/add_exclamation"
 AGENT_SPAN = {"subcomponent": '{"type": "APM-AI_AGENT", "name": "my_agent"}'}
 TOOL_SPAN = {"subcomponent": '{"type": "APM-AI_TOOL", "name": "add_exclamation"}'}
 PROMPT = 'Add an exclamation to the word "Hello"'
+
+
+@pytest.fixture
+def held():
+    """Keeps streams referenced until after the transaction exits."""
+    streams = []
+    yield streams
+    streams.clear()
 
 
 @dt_enabled
@@ -62,6 +74,8 @@ def test_agent_stream_break_after_first_event(loop, set_trace_info, single_tool_
     background_task=True,
 )
 @validate_span_events(count=1, exact_agents=AGENT_SPAN)
+@validate_custom_events(agent_recorded_event)
+@validate_custom_event_count(count=1)
 @background_task()
 def test_agent_stream_aclose_early(loop, set_trace_info, single_tool_model):
     set_trace_info()
@@ -102,6 +116,8 @@ def test_agent_stream_never_iterated(set_trace_info, single_tool_model):
 )
 @validate_span_events(count=1, exact_agents=AGENT_SPAN)
 @validate_span_events(count=1, exact_agents=TOOL_SPAN)
+@validate_custom_events(tool_recorded_event)
+@validate_custom_event_count(count=1)
 @background_task()
 def test_agent_stream_break_after_tool_result(loop, set_trace_info, single_tool_model):
     set_trace_info()
@@ -109,6 +125,59 @@ def test_agent_stream_break_after_tool_result(loop, set_trace_info, single_tool_
 
     async def _consume():
         async for event in agent.stream_async(PROMPT):
+            if "message" in event and event["message"]["content"][0].get("toolResult"):
+                break
+
+    loop.run_until_complete(_consume())
+
+
+@dt_enabled
+@reset_core_stats_engine()
+@validate_transaction_metrics(
+    "mlmodel_strands.test_stream_early_close:test_agent_stream_break_after_first_event_while_held",
+    scoped_metrics=[(AGENT_METRIC, 1)],
+    rollup_metrics=[(AGENT_METRIC, 1)],
+    background_task=True,
+)
+@validate_span_events(count=1, exact_agents=AGENT_SPAN)
+@validate_custom_events(agent_recorded_event)
+@validate_custom_event_count(count=1)
+@background_task()
+def test_agent_stream_break_after_first_event_while_held(loop, set_trace_info, single_tool_model, held):
+    set_trace_info()
+    agent = Agent(name="my_agent", model=single_tool_model, tools=[add_exclamation])
+
+    async def _consume():
+        stream = agent.stream_async(PROMPT)
+        held.append(stream)
+        async for _ in stream:
+            break
+
+    loop.run_until_complete(_consume())
+
+
+@dt_enabled
+@reset_core_stats_engine()
+@validate_transaction_metrics(
+    "mlmodel_strands.test_stream_early_close:test_agent_stream_break_after_tool_result_while_held",
+    scoped_metrics=[(AGENT_METRIC, 1), (TOOL_METRIC, 1)],
+    rollup_metrics=[(AGENT_METRIC, 1), (TOOL_METRIC, 1)],
+    background_task=True,
+)
+@validate_span_events(count=1, exact_agents=AGENT_SPAN)
+@validate_span_events(count=1, exact_agents=TOOL_SPAN)
+@validate_custom_events(agent_recorded_event)
+@validate_custom_events(tool_recorded_event)
+@validate_custom_event_count(count=2)
+@background_task()
+def test_agent_stream_break_after_tool_result_while_held(loop, set_trace_info, single_tool_model, held):
+    set_trace_info()
+    agent = Agent(name="my_agent", model=single_tool_model, tools=[add_exclamation])
+
+    async def _consume():
+        stream = agent.stream_async(PROMPT)
+        held.append(stream)
+        async for event in stream:
             if "message" in event and event["message"]["content"][0].get("toolResult"):
                 break
 
