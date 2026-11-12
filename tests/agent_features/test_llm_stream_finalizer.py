@@ -25,16 +25,15 @@ class Stream:
 
 
 def test_registered_stream_does_not_keep_transaction_alive():
-    freed = []
     gc.collect()
     gc.disable()
     try:
         transaction = BackgroundTask(application_instance(), "test_registered_stream_does_not_keep_transaction_alive")
         stream = Stream()
         transaction._register_llm_stream_finalizer(stream, lambda s, t: None)
-        weakref.ref(transaction, lambda _: freed.append(True))
+        ref = weakref.ref(transaction)
         del transaction
-        assert freed, "Transaction was not freed without a garbage collection pass"
+        assert ref() is None, "Transaction was not freed without a garbage collection pass"
     finally:
         gc.enable()
 

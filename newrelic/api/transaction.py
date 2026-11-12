@@ -338,14 +338,22 @@ class Transaction:
     def _register_llm_stream_finalizer(self, stream, finalize, trace=None):
         stream_ref = weakref.ref(stream)
 
-        def _finalizer():
+        def _finalizer(transaction):
             stream = stream_ref()
             if stream is not None:
-                finalize(stream, self)
+                finalize(stream, transaction)
             elif trace is not None and not trace.exited:
                 trace.__exit__(None, None, None)
 
         self._llm_stream_finalizers.append(_finalizer)
+
+    def _finalize_llm_streams(self):
+        for finalizer in reversed(self._llm_stream_finalizers):
+            try:
+                finalizer(self)
+            except Exception:
+                _logger.debug("Failed to finalize an LLM stream trace at transaction exit.", exc_info=True)
+        self._llm_stream_finalizers.clear()
 
     def __del__(self):
         self._dead = True
@@ -431,12 +439,7 @@ class Transaction:
 
         self._state = self.STATE_STOPPED
 
-        for finalizer in reversed(self._llm_stream_finalizers):
-            try:
-                finalizer()
-            except Exception:
-                pass
-        self._llm_stream_finalizers.clear()
+        self._finalize_llm_streams()
 
         # Force the root span out of the cache if it's there
         # This also prevents saving of the root span in the future since the
